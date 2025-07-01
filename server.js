@@ -28,30 +28,57 @@ mongoose.connect(process.env.MONGO_URI, {
 .then(() => console.log('MongoDB conectado exitosamente'))
 .catch(err => console.error('Error de conexión a MongoDB:', err));
 
-//Esquema Modelo de usuario (Mongoose)
+
+
+// ESQUEMAS DE BASE DE DATOS (ACTUALIZADOS)
+// ========================================================================
+
+// Perfil para usuarios normales
+const UserProfileSchema = new mongoose.Schema({
+    nombre: { type: String, required: true },
+    edad: { type: String, required: true },
+    dui: { type: String, required: true, unique: true },
+    telefono: { type: String, required: true },
+    direccion: { type: String, required: true },
+});
+const UserProfile = mongoose.model('UserProfile', UserProfileSchema);
+
+// Perfil para veterinarios
+const VetProfileSchema = new mongoose.Schema({
+    nombre: { type: String, required: true },
+    telefono: { type: String, required: true },
+    direccion: { type: String, required: true },
+    numero_de_registro: { type: String, required: true, unique: true },
+});
+const VetProfile = mongoose.model('VetProfile', VetProfileSchema);
+
 const UserSchema = new mongoose.Schema({
     email: { type: String, required: true, unique: true },
-    password: { type: String, required: false }, 
-    googleId: { type: String, required: false, unique: true }, 
-    username: { type: String, required: true }
-});
+    password: { type: String, required: false }, // No requerido para login con Google
+    googleId: { type: String, required: false, unique: true, sparse: true }, // sparse para permitir nulos únicos
+    role: {
+        type: String,
+        enum: ['user', 'vet'],
+        required: true,
+        default: 'user'
+    },
+    // Referencia al perfil específico según el rol
+    profile: {
+        type: mongoose.Schema.Types.ObjectId,
+        required: true,
+        refPath: 'roleModel' // Referencia dinámica basada en el campo 'role'
+    },
+    roleModel: {
+        type: String,
+        required: true,
+        enum: ['UserProfile', 'VetProfile']
+    }
+}, { timestamps: true });
 
 const User = mongoose.model('User', UserSchema);
 
-//Middleware - autenticacion - ruta protegida
-const protect = (req, res, next) => {
-    const token = req.header('Authorization')?.replace('Bearer ', '');
-    if (!token) {
-        return res.status(401).json({ message: 'No hay token, autorización denegada' });
-    }
-    try {
-        const decoded = jwt.verify(token, JWT_SECRET);
-        req.user = decoded.user;
-        next();
-    } catch (err) {
-        res.status(401).json({ message: 'Token no válido' });
-    }
-};
+
+// Esquema para la request de un servicio (servicio solicitado por user) - Necesito ver estado final de request de servicio
 
 const ServiceRequestSchema = new mongoose.Schema({
     pet: { type: mongoose.Schema.Types.ObjectId, ref: 'Pet', required: true }, // La mascota que solicita el servicio
@@ -74,49 +101,63 @@ const ServiceRequestSchema = new mongoose.Schema({
     notes: { type: String, required: false }, // Notas del dueño
 
     vetNotes: { type: String, required: false }, // Notas del veterinario
-
-    
-    // TODO: un modelo Veterinarian separado que referencie al User????
     
 }, { timestamps: true });
 
+
 const ServiceRequest = mongoose.model('ServiceRequest', ServiceRequestSchema);
 
-// Rutas de autenticación
 
-// 1. Registro (Email y Contraseña)
 
+
+
+
+
+
+// 1. Registro de Usuario Normal (Actualizado)
 app.post('/api/auth/register', async (req, res) => {
-    const { email, password, username } = req.body;
-    if (!email || !password || !username) {
-        return res.status(400).json({ message: 'Por favor, introduce todos los campos requeridos' });
+    const { nombre, edad, dui, email, telefono, direccion, password, passwordConfirmation } = req.body;
+
+    // Validación de campos
+    if (!nombre || !email || !password || !passwordConfirmation) {
+        return res.status(400).json({ message: 'Por favor, introduce todos los campos requeridos.' });
+    }
+    if (password !== passwordConfirmation) {
+        return res.status(400).json({ message: 'Las contraseñas no coinciden.' });
     }
 
     try {
         let user = await User.findOne({ email });
         if (user) {
-            return res.status(400).json({ message: 'El usuario ya existe' });
+            return res.status(400).json({ message: 'El correo electrónico ya está registrado.' });
         }
 
+        // Crear el perfil del usuario
+        const userProfile = new UserProfile({ nombre, edad, dui, telefono, direccion });
+        await userProfile.save();
+
+        // Hashear la contraseña
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
 
+        // Crear el usuario principal
         user = new User({
             email,
             password: hashedPassword,
-            username
+            role: 'user',
+            profile: userProfile._id,
+            roleModel: 'UserProfile'
         });
-
         await user.save();
 
-        const payload = { user: { id: user.id } };
+        // Generar token JWT
+        const payload = { user: { id: user.id, role: user.role } };
         const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '1h' });
 
         res.status(201).json({
+            message: 'Usuario registrado exitosamente',
             userId: user.id,
             accessToken: token,
-            username: user.username,
-            message: 'Usuario registrado exitosamente'
         });
 
     } catch (err) {
@@ -125,8 +166,60 @@ app.post('/api/auth/register', async (req, res) => {
     }
 });
 
-// 2. Login (Email y Contraseña)
+// Registro de Veterinario
+app.post('/api/auth/vet-register', async (req, res) => {
+    const { nombre, email, telefono, direccion, numero_de_registro, password, passwordConfirmation } = req.body;
 
+    // Validación de campos
+    if (!nombre || !email || !numero_de_registro || !password || !passwordConfirmation) {
+        return res.status(400).json({ message: 'Por favor, introduce todos los campos requeridos.' });
+    }
+    if (password !== passwordConfirmation) {
+        return res.status(400).json({ message: 'Las contraseñas no coinciden.' });
+    }
+
+    try {
+        let user = await User.findOne({ email });
+        if (user) {
+            return res.status(400).json({ message: 'El correo electrónico ya está registrado.' });
+        }
+
+        // Crear el perfil del veterinario
+        const vetProfile = new VetProfile({ nombre, telefono, direccion, numero_de_registro });
+        await vetProfile.save();
+
+        // Hashear la contraseña
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash(password, salt);
+
+        // Crear el usuario principal con rol 'vet'
+        user = new User({
+            email,
+            password: hashedPassword,
+            role: 'vet',
+            profile: vetProfile._id,
+            roleModel: 'VetProfile'
+        });
+        await user.save();
+
+        // Generar token JWT
+        const payload = { user: { id: user.id, role: user.role } };
+        const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '1h' });
+
+        res.status(201).json({
+            message: 'Veterinario registrado exitosamente',
+            userId: user.id,
+            accessToken: token,
+        });
+
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).send('Error del servidor');
+    }
+});
+
+
+// 3. Login (Email y Contraseña) - Sin cambios
 app.post('/api/auth/login', async (req, res) => {
     const { email, password } = req.body;
     if (!email || !password) {
@@ -147,14 +240,13 @@ app.post('/api/auth/login', async (req, res) => {
             return res.status(400).json({ message: 'Credenciales inválidas' });
         }
 
-        const payload = { user: { id: user.id } };
+        const payload = { user: { id: user.id, role: user.role } };
         const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '1h' });
 
         res.json({
             userId: user.id,
             accessToken: token,
-            username: user.username,
-            message: 'Login exitoso'
+            username: user.email 
         });
 
     } catch (err) {
@@ -162,6 +254,7 @@ app.post('/api/auth/login', async (req, res) => {
         res.status(500).send('Error del servidor');
     }
 });
+
 
 // 3. Login con Google
 
@@ -241,16 +334,6 @@ app.post('/api/auth/google-login', async (req, res) => {
     }
 });
 
-//Ruta protegida de ejemplo
-app.get('/api/protected', protect, (req, res) => {
-    res.json({ message: `Bienvenido usuario ${req.user.id} a la ruta protegida!` });
-});
-
-process.on('SIGINT', async () => {
-  await mongoose.connection.close();
-  console.log('Conexión a MongoDB cerrada por Ctrl+C');
-  process.exit(0);
-});
 
 
 
