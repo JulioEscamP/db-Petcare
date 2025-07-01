@@ -53,6 +53,35 @@ const protect = (req, res, next) => {
     }
 };
 
+const ServiceRequestSchema = new mongoose.Schema({
+    pet: { type: mongoose.Schema.Types.ObjectId, ref: 'Pet', required: true }, // La mascota que solicita el servicio
+
+    owner: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true }, // El dueño de la mascota (usuario que solicita)
+
+    veterinarian: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: false }, // El veterinario asignado
+
+    serviceType: { type: String, required: true }, 
+
+    preferredDateTime: { type: Date, required: true }, 
+
+    confirmedDateTime: { type: Date, required: false }, 
+    status: {
+        type: String,
+        enum: ['Pending', 'Approved', 'Rejected', 'Cancelled'],
+        default: 'Pending'
+    },
+
+    notes: { type: String, required: false }, // Notas del dueño
+
+    vetNotes: { type: String, required: false }, // Notas del veterinario
+
+    
+    // TODO: un modelo Veterinarian separado que referencie al User????
+    
+}, { timestamps: true });
+
+const ServiceRequest = mongoose.model('ServiceRequest', ServiceRequestSchema);
+
 // Rutas de autenticación
 
 // 1. Registro (Email y Contraseña)
@@ -147,7 +176,7 @@ app.post('/api/auth/google-login', async (req, res) => {
         const ticket = await googleClient.verifyIdToken({
             idToken: idToken,
             //MI ID DE CLIENTE DE GOOGLE
-            audience: 75282745771-197vm5m67kuec92bj5o22ju2bf2ap4kl.apps.googleusercontent.com, 
+            audience: "75282745771-197vm5m67kuec92bj5o22ju2bf2ap4kl.apps.googleusercontent.com",
         });
         const payload = ticket.getPayload();
         const googleId = payload['sub']; 
