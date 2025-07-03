@@ -36,10 +36,10 @@ mongoose.connect(process.env.MONGO_URI, {
 // Perfil para usuarios normales
 const UserProfileSchema = new mongoose.Schema({
     nombre: { type: String, required: true },
-    edad: { type: String, required: true },
-    dui: { type: String, required: true, unique: true },
-    telefono: { type: String, required: true },
-    direccion: { type: String, required: true },
+    edad: { type: String, required: false },
+    dui: { type: String, required: false, unique: true, sparse: true },
+    telefono: { type: String, required: false },
+    direccion: { type: String, required: false },
 });
 const UserProfile = mongoose.model('UserProfile', UserProfileSchema);
 
@@ -132,30 +132,26 @@ app.post('/api/auth/register', async (req, res) => {
             return res.status(400).json({ message: 'El correo electrónico ya está registrado.' });
         }
 
-        // Crear el perfil del usuario
-        const userProfile = new UserProfile({ nombre, edad, dui, telefono, direccion });
-        await userProfile.save();
+        const vetProfile = new VetProfile({ nombre, telefono, direccion, numero_de_registro });
+        await vetProfile.save();
 
-        // Hashear la contraseña
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
 
-        // Crear el usuario principal
         user = new User({
             email,
             password: hashedPassword,
-            role: 'user',
-            profile: userProfile._id,
-            roleModel: 'UserProfile'
+            role: 'vet',
+            profile: vetProfile._id,
+            roleModel: 'VetProfile'
         });
         await user.save();
 
-        // Generar token JWT
         const payload = { user: { id: user.id, role: user.role } };
         const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '1h' });
 
         res.status(201).json({
-            message: 'Usuario registrado exitosamente',
+            message: 'Veterinario registrado exitosamente',
             userId: user.id,
             accessToken: token,
         });
@@ -257,6 +253,7 @@ app.post('/api/auth/login', async (req, res) => {
 
 
 // 3. Login con Google
+
 app.post('/api/auth/google-login', async (req, res) => {
     const { idToken } = req.body;
     if (!idToken) {
@@ -266,16 +263,16 @@ app.post('/api/auth/google-login', async (req, res) => {
     try {
         const ticket = await googleClient.verifyIdToken({
             idToken: idToken,
-            audience: GOOGLE_CLIENT_ID,
+            audience: process.env.GOOGLE_CLIENT_ID,
         });
         const payload = ticket.getPayload();
         const googleId = payload['sub'];
         const email = payload['email'];
         const nombre = payload['name'];
 
-        // Caso 1: El usuario ya existe con esta cuenta de Google
         let user = await User.findOne({ googleId }).populate('profile');
         if (user) {
+            // Caso 1: El usuario ya existe con esta cuenta de Google
             const jwtPayload = { user: { id: user.id, role: user.role } };
             const token = jwt.sign(jwtPayload, JWT_SECRET, { expiresIn: '1h' });
             return res.json({
@@ -285,9 +282,9 @@ app.post('/api/auth/google-login', async (req, res) => {
             });
         }
 
-        // Caso 2: El usuario existe con este email, pero no ha usado Google Sign-in
         user = await User.findOne({ email });
         if (user) {
+            // Caso 2: El usuario existe con este email, pero no ha usado Google antes.
             user.googleId = googleId;
             await user.save();
             const jwtPayload = { user: { id: user.id, role: user.role } };
@@ -295,21 +292,18 @@ app.post('/api/auth/google-login', async (req, res) => {
             return res.json({
                 userId: user.id,
                 accessToken: token,
-                username: user.email, 
+                username: user.email,
             });
         }
 
-        // Caso 3: El usuario es completamente nuevo - Creamos un perfil basico y el usuario principal.
-        const newUserProfile = new UserProfile({
-            nombre: nombre,
-            // La app puede pedirle al usuario que los complete más tarde.
-        });
+        // Caso 3: El usuario es completamente nuevo.
+        const newUserProfile = new UserProfile({ nombre: nombre });
         await newUserProfile.save();
 
         const newUser = new User({
             email: email,
             googleId: googleId,
-            password: null, // Sin contraseña local
+            password: null,
             role: 'user',
             profile: newUserProfile._id,
             roleModel: 'UserProfile'
@@ -330,8 +324,5 @@ app.post('/api/auth/google-login', async (req, res) => {
         res.status(500).json({ message: 'Error al verificar token de Google', error: err.message });
     }
 });
-
-
-
 
 app.listen(PORT, () => console.log(`Servidor corriendo en el puerto ${PORT}`));
