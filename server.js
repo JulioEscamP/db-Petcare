@@ -48,14 +48,13 @@ const VetProfileSchema = new mongoose.Schema({
     nombre: { type: String, required: true },
     telefono: { type: String, required: true },
     direccion: { type: String, required: true },
-    numero_de_registro: { type: String, required: true, unique: true },
 });
 const VetProfile = mongoose.model('VetProfile', VetProfileSchema);
 
 const UserSchema = new mongoose.Schema({
     email: { type: String, required: true, unique: true },
     password: { type: String, required: false }, // No requerido para login con Google
-    googleId: { type: String, required: false, unique: true, sparse: true }, // sparse para permitir nulos únicos
+     // sparse para permitir nulos únicos
     role: {
         type: String,
         enum: ['user', 'vet'],
@@ -115,7 +114,7 @@ const ServiceRequest = mongoose.model('ServiceRequest', ServiceRequestSchema);
 
 
 // 1. Registro de Usuario Normal (Actualizado)
-app.post('/api/auth/register', async (req, res) => {
+app.post('/api/auth/user-register', async (req, res) => {
     const { nombre, edad, dui, email, telefono, direccion, password, passwordConfirmation } = req.body;
 
     // Validacion de campos
@@ -132,8 +131,8 @@ app.post('/api/auth/register', async (req, res) => {
             return res.status(400).json({ message: 'El correo electrónico ya está registrado.' });
         }
 
-        const vetProfile = new VetProfile({ nombre, telefono, direccion, numero_de_registro });
-        await vetProfile.save();
+        const userProfile = new UserProfile({ nombre, edad, dui, telefono, direccion }); // <-- AHORA CREA UserProfile
+        await userProfile.save();
 
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
@@ -141,9 +140,9 @@ app.post('/api/auth/register', async (req, res) => {
         user = new User({
             email,
             password: hashedPassword,
-            role: 'vet',
-            profile: vetProfile._id,
-            roleModel: 'VetProfile'
+            role: 'user', 
+            profile: userProfile._id, 
+            roleModel: 'UserProfile' 
         });
         await user.save();
 
@@ -151,23 +150,23 @@ app.post('/api/auth/register', async (req, res) => {
         const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '1h' });
 
         res.status(201).json({
-            message: 'Veterinario registrado exitosamente',
+            message: 'Usuario registrado exitosamente',
             userId: user.id,
             accessToken: token,
         });
 
     } catch (err) {
         console.error(err.message);
-        res.status(500).send('Error del servidor');
+        res.status(500).send('Error del servidor al registrar usuario.');
     }
 });
 
 // Registro de Veterinario
 app.post('/api/auth/vet-register', async (req, res) => {
-    const { nombre, email, telefono, direccion, numero_de_registro, password, passwordConfirmation } = req.body;
+    
+    const { nombre, email, telefono, direccion, password, passwordConfirmation } = req.body; 
 
-    // Validacion de campos
-    if (!nombre || !email || !numero_de_registro || !password || !passwordConfirmation) {
+    if (!nombre || !email || !password || !passwordConfirmation) { 
         return res.status(400).json({ message: 'Por favor, introduce todos los campos requeridos.' });
     }
     if (password !== passwordConfirmation) {
@@ -180,8 +179,7 @@ app.post('/api/auth/vet-register', async (req, res) => {
             return res.status(400).json({ message: 'El correo electrónico ya está registrado.' });
         }
 
-        // Crear el perfil del veterinario
-        const vetProfile = new VetProfile({ nombre, telefono, direccion, numero_de_registro });
+        const vetProfile = new VetProfile({ nombre, telefono, direccion }); 
         await vetProfile.save();
 
         // Hashear la contraseña
@@ -210,7 +208,7 @@ app.post('/api/auth/vet-register', async (req, res) => {
 
     } catch (err) {
         console.error(err.message);
-        res.status(500).send('Error del servidor');
+        res.status(500).send('Error del servidor al registrar veterinario.');
     }
 });
 
@@ -322,6 +320,67 @@ app.post('/api/auth/google-login', async (req, res) => {
     } catch (err) {
         console.error('Error en Google Login:', err.message);
         res.status(500).json({ message: 'Error al verificar token de Google', error: err.message });
+    }
+});
+
+// Modelo de mascota
+const PetSchema = new mongoose.Schema({
+    nombre: { type: String, required: true },
+    edad: { type: Number, required: true },
+    raza: { type: String, required: true },
+    peso: { type: Number, required: true },
+    altura: { type: Number, required: true },
+    tipo: { type: String, enum: ['DOG', 'CAT', 'OTHER'], required: true },
+    owner: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+}, { timestamps: true });
+
+const Pet = mongoose.model('Pet', PetSchema);
+
+// Registrar nueva mascota (protegido con token)
+app.post('/api/pets/register', async (req, res) => {
+    const { nombre, edad, raza, peso, altura, tipo, userId } = req.body;
+
+    if (!nombre || !edad || !raza || !peso || !altura || !tipo || !userId) {
+        return res.status(400).json({ message: 'Todos los campos son obligatorios.' });
+    }
+
+    try {
+        const owner = await User.findById(userId);
+        if (!owner) return res.status(404).json({ message: 'Usuario no encontrado.' });
+
+        const newPet = new Pet({
+            nombre,
+            edad,
+            raza,
+            peso,
+            altura,
+            tipo,
+            owner: userId
+        });
+
+        await newPet.save();
+
+        res.status(201).json({
+            message: 'Mascota registrada exitosamente',
+            pet: newPet
+        });
+
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).json({ message: 'Error al registrar la mascota', error: err.message });
+    }
+});
+
+// Obtener todas las mascotas de un usuario
+app.get('/api/pets/by-user/:userId', async (req, res) => {
+    const { userId } = req.params;
+
+    try {
+        const pets = await Pet.find({ owner: userId });
+        res.json(pets);
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).json({ message: 'Error al obtener mascotas' });
     }
 });
 
